@@ -1,0 +1,1 @@
+"""Safe structured operational events."""
