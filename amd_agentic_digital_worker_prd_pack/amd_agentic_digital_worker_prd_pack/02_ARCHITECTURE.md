@@ -2,37 +2,43 @@
 
 ## 1. High-level architecture
 
-``` text
-Client (CLI / UI)
-      |
-      v
-FastAPI routes + request validation
-      |
-      v
-Incident Service ---- PostgreSQL/SQLite (incidents, runs, approvals)
-      |
-      v
-LangGraph workflow (explicit state machine)
-  | intake
-  | retrieve context
-  | plan diagnostics
-  | call allowlisted read-only tools
-  | validate evidence
-  | generate structured report
-  | approval gate for simulated write action
-      |
-      +---- Retrieval service ---- Chroma/pgvector
-      |          |                     |
-      |       Chunker               Embeddings
-      |          |
-      |       Runbooks / past incidents
-      |
-      +---- Tool registry ---- Logs / metrics / incident mock adapters
-      |
-      +---- LLM provider adapter ---- Mock / configured provider
-      |
-      v
-Trace + structured logs + evaluation events
+The solid nodes below are implemented in Phase 2. Dashed nodes are planned for
+later phases and are not runtime claims.
+
+```mermaid
+flowchart TB
+    Client[CLI, browser, or API client] --> Boundary[Request-size middleware and Pydantic validation]
+    Boundary --> API[FastAPI routes]
+
+    API --> IncidentStore[(SQLite incident store)]
+    API --> Workflow[Bounded LangGraph workflow]
+    API --> KnowledgeAPI[Read-only knowledge API]
+
+    Workflow --> Retrieval[Retrieval service]
+    Retrieval --> Embedder[Deterministic hashing embedder]
+    Retrieval <--> VectorStore[(SQLite vector index)]
+    Corpus[Versioned Markdown corpus] --> Chunker[Bounded deterministic chunker]
+    Chunker --> Embedder
+    Chunker --> VectorStore
+
+    Workflow --> Tools[Allowlisted read-only diagnostics]
+    Tools --> Fixtures[(Synthetic logs, metrics, deployments, incidents)]
+    Workflow --> Provider[Deterministic mock report provider]
+    Workflow --> Validator[Citation, schema, and action-policy validator]
+    Validator --> IncidentStore
+    Workflow --> Trace[(Persisted trace events)]
+
+    KnowledgeAPI --> VectorStore
+    API --> Logs[Allowlisted JSON logs]
+
+    RealProvider[Configured live model provider]:::planned
+    Approval[Human approval and simulated remediation]:::planned
+    Evaluation[Evaluation runner]:::planned
+    Workflow -. later phase .-> RealProvider
+    Workflow -. later phase .-> Approval
+    Trace -. later phase .-> Evaluation
+
+    classDef planned fill:#f5f5f5,stroke:#777,stroke-dasharray:5 5,color:#333;
 ```
 
 ## 2. Design principles
@@ -129,18 +135,54 @@ transitions.
 
 ## 5. Workflow graph
 
-1.  validate_input
-2.  retrieve_context
-3.  plan_diagnostics
-4.  execute_read_only_tools
-5.  validate_evidence
-6.  if insufficient evidence: request_more_info or abstain
-7.  generate_report
-8.  optionally create remediation proposal
-9.  pause for human approval if an action is requested
-10. execute simulated action only after approval
-11. verify simulated result
-12. finalize and persist trace
+The implemented Phase 2 workflow has five bounded stages and terminal outcomes
+that are persisted with safe error codes.
+
+```mermaid
+stateDiagram-v2
+      [*] --> Intake
+      Intake --> Retrieval: validated incident
+      Retrieval --> Diagnostics: relevant chunks or empty result
+      Retrieval --> Degraded: timeout or index failure
+      Diagnostics --> Report: tool evidence collected
+      Diagnostics --> Blocked: budget exhausted
+      Diagnostics --> Degraded: tool timeout or failure
+      Report --> Validate: structured provider output
+      Report --> Failed: provider or output failure
+      Validate --> Succeeded: grounded and consistent
+      Validate --> NeedsInput: missing or conflicting evidence
+      Validate --> Failed: invalid citations or policy claim
+      Succeeded --> [*]
+      NeedsInput --> [*]
+      Blocked --> [*]
+      Degraded --> [*]
+      Failed --> [*]
+```
+
+```mermaid
+sequenceDiagram
+      actor User
+      participant API as FastAPI
+      participant Graph as LangGraph
+      participant Index as SQLite vector index
+      participant Tools as Diagnostic tools
+      participant Provider as Mock provider
+      participant Store as SQLite run store
+
+      User->>API: POST incident run
+      API->>Graph: Execute bounded investigation
+      Graph->>Index: Retrieve service-filtered chunks
+      Index-->>Graph: Ranked chunks and conflict flag
+      Graph->>Tools: Run four allowlisted diagnostics
+      Tools-->>Graph: Typed observations
+      Graph->>Provider: Generate structured report
+      Provider-->>Graph: Candidate report
+      Graph->>Index: Resolve cited chunks
+      Graph->>Graph: Validate evidence and action policy
+      Graph->>Store: Persist report and trace
+      Store-->>API: Terminal run record
+      API-->>User: Succeeded or needs_input
+```
 
 Every cycle must have max_steps and max_tool_calls. Detect repeated
 identical tool calls and stop loops.

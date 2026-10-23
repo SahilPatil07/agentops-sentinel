@@ -2,6 +2,11 @@
 
 Base path: `/api/v1`
 
+Phase 2 status: incident, run, report, trace, health, and read-only knowledge
+endpoints below are implemented. Approval execution, knowledge mutation, and
+evaluation remain planned.
+The OpenAPI schema at `/openapi.json` describes the implemented contracts.
+
 ## 1. Create an incident
 
 `POST /incidents`
@@ -19,7 +24,7 @@ Request:
 }
 ```
 
-Response:
+Response (201; abbreviated, IDs generated at runtime):
 
 ``` json
 {
@@ -27,6 +32,10 @@ Response:
   "status": "created"
 }
 ```
+
+The full response also includes the validated input fields and `created_at`.
+`GET /incidents/{incident_id}` returns that persisted record, or 404 if missing.
+Creating an incident does not start a run; incident and run IDs are separate.
 
 ## 2. Start an investigation
 
@@ -41,17 +50,24 @@ Request:
 }
 ```
 
-Response:
+Response (200; abbreviated, IDs generated at runtime):
 
 ``` json
 {
   "run_id": "run_...",
-  "status": "running"
+  "status": "succeeded"
 }
 ```
 
-If implemented synchronously for the MVP, return a completed run
-response; preserve a run resource either way.
+Phase 2 runs synchronously and returns the persisted terminal run. The full
+record includes incident ID, timestamps, tool/step counters, effective tool
+budget, provider/model names, and a nullable error code. Outcomes are `succeeded`,
+`needs_input`, `blocked`, `degraded`, or `failed`. HTTP 200 means the operation
+returned a run record, not that the investigation succeeded or an action ran.
+An interrupted run is marked failed on the next single-process startup.
+
+Requests accept only `mode: investigate` and an integer `max_tool_calls` from
+1 to 16 (default 8), capped by the server limit. Every POST creates a new run.
 
 ## 3. Read run status/report
 
@@ -59,13 +75,24 @@ response; preserve a run resource either way.
 -   `GET /runs/{run_id}/report`
 -   `GET /runs/{run_id}/trace`
 
-The report schema should include: - summary - observed_facts\[\] -
-hypotheses\[\] with evidence_refs and confidence_rationale -
-missing_information\[\] - recommended_actions\[\] with risk,
-preconditions, verification, rollback, approval_required -
-source_citations\[\] - limitations - status
+The report schema includes summary, status, observed facts, hypotheses with
+evidence references and confidence rationale, missing information, simulated
+recommended actions, diagnostic source citations, knowledge chunk citations,
+and limitations.
 
-## 4. Approvals
+Diagnostic citations are validated against collected observations. Knowledge
+citations include the document and chunk IDs, stance, content hash, exact source
+offsets, excerpt, and retrieval score; each is validated against the persistent
+index before a report is accepted.
+Actions are simulated proposals with `approval_required: true` and
+`execution_status: not_executed`. No proposal can execute in Phase 2.
+
+Missing runs return 404; a run without a validated report returns 409 from the
+report endpoint. Trace pagination accepts `offset >= 0` and `limit` from 1 to
+100 (default 100). Events are ordered by sequence and include safe failure codes,
+tool observations, and timing metadata rather than raw exception messages.
+
+## 4. Approvals (planned)
 
 -   `POST /runs/{run_id}/actions/{action_id}/approve`
 -   `POST /runs/{run_id}/actions/{action_id}/reject`
@@ -74,15 +101,15 @@ Approval request requires reviewer label and plan version. In a
 portfolio demo, reviewer identity may be a local demo identity, but must
 be clearly documented as not production authentication.
 
-## 5. Knowledge ingestion
+## 5. Knowledge retrieval
 
--   `POST /knowledge/documents` for a local/admin ingestion path
 -   `GET /knowledge/documents`
--   `DELETE /knowledge/documents/{document_id}`
+-   `GET /knowledge/chunks/{chunk_id}`
 
-Do not expose ingestion to unauthenticated public deployment without
-protections. For MVP, disable mutation endpoints by default or protect
-them with a demo admin token.
+Both implemented endpoints are read-only. A missing chunk returns 404. The local
+corpus is synchronized at startup when the index is empty, or explicitly with
+`python -m agentic_worker.retrieval.ingest`. No unauthenticated mutation endpoint
+is exposed.
 
 ## 6. Health and evaluation
 
@@ -91,6 +118,10 @@ them with a demo admin token.
 -   `POST /evals/run` (optional; admin-only)
 -   CLI alternative:
     `python -m agentic_worker.evaluation.run --dataset evals/cases.jsonl`
+
+Readiness checks access to the incident, run, and trace tables and the local
+vector index; failure returns 503 without storage details. Liveness does
+not depend on storage. Evaluation routes and CLI are planned and are not runnable yet.
 
 ## 7. HTTP status conventions
 

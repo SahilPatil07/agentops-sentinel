@@ -12,6 +12,9 @@ dependencies = [
     "fastapi>=0.115,<1",
     "pydantic>=2.10,<3",
     "pydantic-settings>=2.7,<3",
+    "SQLAlchemy>=2.0,<3",
+    "langgraph>=1,<2",
+    "langsmith>=0.14,<1",
     "uvicorn>=0.34,<1",
 ]
 
@@ -29,6 +32,9 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"agentic_worker.tools" = ["seed_data.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

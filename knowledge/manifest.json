@@ -1,0 +1,77 @@
+{
+  "version": "2026-10-23.1",
+  "documents": [
+    {
+      "document_id": "runbook-ingestion-connectivity",
+      "filename": "runbook-ingestion-connectivity.md",
+      "title": "Document ingestion dependency connectivity",
+      "service": "document-ingestion",
+      "kind": "runbook",
+      "hypothesis": "extraction_host_change",
+      "stance": "supports"
+    },
+    {
+      "document_id": "incident-ingestion-017",
+      "filename": "incident-ingestion-017.md",
+      "title": "DEMO-017 extraction host incident",
+      "service": "document-ingestion",
+      "kind": "past_incident",
+      "hypothesis": "extraction_host_change",
+      "stance": "supports"
+    },
+    {
+      "document_id": "runbook-ingestion-capacity",
+      "filename": "runbook-ingestion-capacity.md",
+      "title": "Document ingestion capacity checks",
+      "service": "document-ingestion",
+      "kind": "runbook",
+      "hypothesis": "unknown",
+      "stance": "context"
+    },
+    {
+      "document_id": "incident-ingestion-contradiction",
+      "filename": "incident-ingestion-contradiction.md",
+      "title": "DEMO-024 unchanged extraction host",
+      "service": "document-ingestion",
+      "kind": "past_incident",
+      "hypothesis": "extraction_host_change",
+      "stance": "contradicts"
+    },
+    {
+      "document_id": "runbook-search-latency",
+      "filename": "runbook-search-latency.md",
+      "title": "Search API latency triage",
+      "service": "search-api",
+      "kind": "runbook",
+      "hypothesis": "unknown",
+      "stance": "context"
+    },
+    {
+      "document_id": "incident-search-006",
+      "filename": "incident-search-006.md",
+      "title": "DEMO-006 search index lag",
+      "service": "search-api",
+      "kind": "past_incident",
+      "hypothesis": "unknown",
+      "stance": "context"
+    },
+    {
+      "document_id": "runbook-billing-webhook",
+      "filename": "runbook-billing-webhook.md",
+      "title": "Billing webhook delivery",
+      "service": "billing-webhook",
+      "kind": "runbook",
+      "hypothesis": "unknown",
+      "stance": "context"
+    },
+    {
+      "document_id": "incident-notifications-011",
+      "filename": "incident-notifications-011.md",
+      "title": "DEMO-011 notification queue backlog",
+      "service": "notification-worker",
+      "kind": "past_incident",
+      "hypothesis": "unknown",
+      "stance": "context"
+    }
+  ]
+}

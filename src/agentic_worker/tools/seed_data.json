@@ -1,0 +1,34 @@
+[
+  {
+    "source_id": "demo-log-ingestion-001",
+    "tool_name": "query_logs",
+    "service": "document-ingestion",
+    "summary": "Synthetic snapshot: extraction requests return HTTP 502 because the configured extraction host cannot be reached.",
+    "signal": "dependency_unreachable",
+    "value": "extractor-v2.internal"
+  },
+  {
+    "source_id": "demo-metric-ingestion-001",
+    "tool_name": "query_metrics",
+    "service": "document-ingestion",
+    "summary": "Synthetic snapshot: the ingestion HTTP 5xx error ratio is 0.35 in the ten-minute post-deployment window.",
+    "signal": "error_rate",
+    "value": 0.35
+  },
+  {
+    "source_id": "demo-deployment-ingestion-001",
+    "tool_name": "compare_deployments",
+    "service": "document-ingestion",
+    "summary": "Synthetic deployment comparison: the extraction host changed from extractor.internal to extractor-v2.internal before errors increased.",
+    "signal": "dependency_host_changed",
+    "value": "extractor-v2.internal"
+  },
+  {
+    "source_id": "demo-incident-ingestion-001",
+    "tool_name": "get_recent_incidents",
+    "service": "document-ingestion",
+    "summary": "Synthetic prior incident DEMO-017 recorded an ingestion outage caused by an incorrect extraction-host setting.",
+    "signal": "prior_dependency_incident",
+    "value": "DEMO-017"
+  }
+]

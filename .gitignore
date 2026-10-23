@@ -15,6 +15,9 @@ htmlcov/
 *.db
 *.db-*
 *.sqlite*
+chroma/
+*.chroma/
+knowledge-index/
 uploads/
 reports/
 evals/private/
