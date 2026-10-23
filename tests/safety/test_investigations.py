@@ -138,7 +138,8 @@ def test_provider_failure_is_persisted(
 def test_retrieval_failure_stops_investigation(
     fault: Literal["timeout", "exception"],
 ) -> None:
-    application = create_app(Settings(_env_file=None, retrieval_timeout_seconds=0.02))
+    timeout = 0.02 if fault == "timeout" else 1.0
+    application = create_app(Settings(_env_file=None, retrieval_timeout_seconds=timeout))
     service = cast(InvestigationService, application.state.investigations)
     service.knowledge = cast(Any, FaultyKnowledge(fault))
     with TestClient(application) as client:
