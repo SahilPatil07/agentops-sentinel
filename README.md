@@ -7,17 +7,16 @@ production incident-response service or an enterprise-certified product.
 
 ## Current Status
 
-Phase 2 adds local document retrieval to the working offline investigation:
-bounded Markdown ingestion, deterministic lexical hashing embeddings, a
-persistent SQLite vector index, resolvable chunk citations, conflict detection, and
-read-only knowledge inspection. Incident persistence, four synthetic
-diagnostics, the bounded LangGraph workflow, validated reports, and traces remain
-local. No paid API or external service is required.
+Phase 3 adds a typed read-only tool registry, bounded timeout retries,
+duplicate-call detection, content-versioned action plans, persisted approval
+decisions, and idempotent simulated remediation. Local document retrieval,
+resolvable citations, incident persistence, the bounded LangGraph workflow, and
+traces remain offline. No paid API or external service is required.
 
 This is a simulation over fixed diagnostics and an eight-document synthetic
 corpus, not a general incident diagnosis system. The hashing retriever is a
 reproducible lexical RAG baseline, not semantic understanding. A live LLM,
-approval execution, evaluation, and a dashboard are not implemented yet.
+production action execution, evaluation, and a dashboard are not implemented.
 
 The application currently consists of:
 
@@ -25,6 +24,8 @@ The application currently consists of:
 flowchart LR
   Client[HTTP client] --> API[FastAPI API]
   API --> Store[(SQLite incidents, runs, reports, traces)]
+  API --> Actions[Approval policy and simulator]
+  Actions --> Store
   API --> Graph[Bounded LangGraph workflow]
   Graph --> Intake[Intake]
   Intake --> Retrieval[Local retrieval]
@@ -44,7 +45,7 @@ placeholder providers or diagnostic tools.
 ## Local Setup
 
 Requirements: Python 3.12+ and internet access for the initial dependency install.
-No GPU, LLM credentials, Docker, or corporate model access is required for Phase 2.
+No GPU, LLM credentials, Docker, or corporate model access is required for Phase 3.
 The local verification environment is Windows with Python 3.14.6. CI is configured
 for Python 3.12 and 3.14 on Windows and Linux; hosted CI has not run yet.
 
@@ -75,6 +76,7 @@ The default settings work without a `.env` file. Optional values are documented 
 | `WORKER_DATABASE_PATH` | `agentops.sqlite3` | Local SQLite file path or `:memory:` |
 | `WORKER_MAX_GRAPH_STEPS` | `8` | Integer from 1 to 32 |
 | `WORKER_MAX_TOOL_CALLS` | `8` | Integer from 1 to 16 |
+| `WORKER_MAX_TOOL_ATTEMPTS` | `2` | Integer from 1 to 3; timeout retries count as calls |
 | `WORKER_TOOL_TIMEOUT_SECONDS` | `2` | Greater than 0, at most 30 |
 | `WORKER_PROVIDER_TIMEOUT_SECONDS` | `5` | Greater than 0, at most 60 |
 | `WORKER_WORKFLOW_TIMEOUT_SECONDS` | `30` | Graph deadline, greater than 0, at most 120 |
@@ -136,10 +138,22 @@ Invoke-RestMethod "$base/runs/$($run.run_id)/trace?offset=0&limit=100" | Convert
 
 The known fixture produces `succeeded`, four tool calls, five graph steps, and a
 medium-confidence extraction-host hypothesis grounded in diagnostics and a
-retrieved runbook chunk. Every recommendation remains
-`not_executed` and requires approval. There is no action execution endpoint.
+retrieved runbook chunk. Every recommendation includes a content-derived
+`plan_version`, remains `not_executed` in the report, and requires approval.
 Here `succeeded` means the investigation produced a validated report, not that
-the outage was fixed.
+the outage was fixed. To exercise the local simulation after reading the report:
+
+```powershell
+$action = $report.recommended_actions[0]
+$decision = @{ reviewer = "demo-reviewer"; plan_version = $action.plan_version } | ConvertTo-Json
+Invoke-RestMethod "$base/runs/$($run.run_id)/actions/$($action.action_id)/approve" -Method Post -ContentType "application/json" -Body $decision
+$execute = @{ plan_version = $action.plan_version } | ConvertTo-Json
+Invoke-RestMethod "$base/runs/$($run.run_id)/actions/$($action.action_id)/execute" -Method Post -ContentType "application/json" -Body $execute
+```
+
+The result is labeled `simulated`; it changes no service or external state.
+Reject uses the same request at `/reject`. Reviewer labels are local demo audit
+metadata, not authenticated identities. Bind the application to localhost only.
 
 The report's four diagnostic source IDs identify records in
 [seed_data.json](src/agentic_worker/tools/seed_data.json) and the persisted tool
@@ -166,6 +180,9 @@ POST creates a new run; there is no background job queue or idempotency key yet.
 | `GET /api/v1/runs/{run_id}` | 200, stored run status and counters |
 | `GET /api/v1/runs/{run_id}/report` | 200, validated report; 409 if none exists |
 | `GET /api/v1/runs/{run_id}/trace` | 200, ordered events; `offset` and `limit` (1-100) |
+| `POST /api/v1/runs/{run_id}/actions/{action_id}/approve` | 200, persisted plan-bound approval |
+| `POST /api/v1/runs/{run_id}/actions/{action_id}/reject` | 200, persisted rejection |
+| `POST /api/v1/runs/{run_id}/actions/{action_id}/execute` | 200, idempotent simulated outcome; never a real write |
 | `GET /api/v1/knowledge/documents` | 200, indexed document metadata |
 | `GET /api/v1/knowledge/chunks/{chunk_id}` | 200, exact stored chunk or 404 |
 
@@ -201,8 +218,10 @@ environment (`demo` only), and up to 20 evidence references (1-500 each). String
 are trimmed, unknown fields are forbidden, and types are not silently coerced.
 The incident ID is assigned at creation; a separate run ID is assigned when an
 investigation starts. The effective tool budget is the smaller of the request
-and server limits. Tools run once each in a fixed sequence, so there is no tool
-selection loop. Timeouts, size limits, and malformed outputs stop or bound work:
+and server limits. Tools use a typed read-only allowlist and a fixed sequence, so
+there is no open-ended tool-selection loop. Timeout retries count against the
+call budget, and a repeated name-plus-input fingerprint is blocked. Size limits
+and malformed outputs stop or bound work:
 
 - `succeeded`: a validated report is available.
 - `needs_input`: insufficient evidence; a report explains what is missing.
@@ -211,8 +230,9 @@ selection loop. Timeouts, size limits, and malformed outputs stop or bound work:
 - `failed`: provider/report validation, workflow, or interrupted-run failure.
 
 Failed, blocked, and degraded runs retain their trace but do not expose a report.
-Only provider timeouts and malformed structured output are retried, up to the
-configured attempt count. Other failures stop immediately. Oversized output is
+Provider timeouts and malformed structured output are retried. Tool timeouts are
+also retried up to `WORKER_MAX_TOOL_ATTEMPTS`; deterministic tool failures stop
+immediately. Oversized output is
 rejected rather than silently truncated. Detailed error codes appear in the run
 record, and unavailable reports return 409.
 
@@ -233,26 +253,27 @@ external service calls. The dependency audit queries a public advisory service
 and needs internet access; it is separate from the offline test suite. Build
 output is generated under `dist/` and ignored by Git.
 
-Verified locally on 2026-10-23 with Python 3.14.6:
+Verified locally on 2026-10-23 with Python 3.14.6 and Python 3.12.13:
 
-- 72 tests passed, including network-blocked execution, invalid diagnostic and
-  document citations, retrieval failures, conflict abstention, budgets,
-  deadlines, and restart recovery.
-- Ruff lint and formatting passed; strict mypy passed for 41 source files.
-- The hash-locked Phase 2 dependency install succeeded.
+- 80 tests passed on both versions, including missing, rejected, and stale
+  approvals, restart idempotency, bounded tool retries, duplicate-call blocking,
+  prompt injection, citation validity, budgets, and deadlines.
+- Ruff lint and formatting passed; strict mypy passed for 44 source files.
+- The hash-locked dependency install succeeded.
 - Source distribution and wheel built successfully with `--no-isolation`.
 - The wheel contains all four unique synthetic diagnostic records.
 - `pip check` found no broken requirements.
 - The audit identified unresolved critical advisories in Chroma 1.5.9. Chroma
   was replaced with the bounded SQLite vector adapter; the final lock audit
   found no known vulnerabilities.
-- A real HTTP demo produced `succeeded`, four tool calls, five graph steps,
-  four diagnostic citations, two resolvable knowledge citations, and 19 trace
-  events; its action remained `not_executed`.
+- A real HTTP demo produced a grounded `succeeded` run, persisted an approval,
+  returned a `simulated` outcome, changed no external state, and returned the
+  same execution ID when repeated.
 - A second HTTP demo returned `needs_input` for an unknown service, with no
   hypothesis or recommended action.
-- Hosted GitHub Actions, Python 3.12 execution, Docker, and later-phase acceptance
-  gates are not claimed as verified.
+- Hosted GitHub Actions passed on Ubuntu and Windows with Python 3.12 and 3.14
+  for commit `09b7577`; the Phase 3 changes are locally verified before push.
+  Docker and later-phase acceptance gates are not claimed as verified.
 
 The vulnerability result is a point-in-time advisory check, not a guarantee that
 dependencies are vulnerability-free. Local environments, caches, build artifacts,
@@ -298,9 +319,9 @@ Additional scope decisions:
 
 ## Limitations And Next Phase
 
-There is no authentication, rate limiter, request-read deadline, approval
-execution, Docker setup, or evaluation runner yet. Bind to localhost only.
-Public deployment requires authentication,
+There is no authentication, rate limiter, request-read deadline, real remediation,
+Docker setup, or evaluation runner yet. The approval API accepts a reviewer label
+but does not verify identity. Bind to localhost only. Public deployment requires authentication,
 TLS, server/proxy timeouts, rate limits, and additional review. Schema definitions
 are not evidence that workflow safety or citation validity has been implemented.
 
@@ -310,9 +331,9 @@ readiness fails, check the database path and permissions and ensure the server
 runs the application lifespan. Do not run multiple workers against the demo
 database. A dependency warning should be investigated rather than suppressed.
 
-Phase 2 provides the local knowledge corpus, ingestion, chunking, retrieval, and
-document-backed citations. Later phases expand tool and approval policies,
-integrate a real provider, add evaluation, and containerize deployment.
+Phase 3 provides bounded read-only tools and plan-bound approval for a simulator
+that cannot mutate external state. Later phases integrate a real provider, add
+evaluation, and containerize deployment.
 
 No license has been selected yet. Evaluation metrics will only be published once
 the corresponding features are implemented and verified.

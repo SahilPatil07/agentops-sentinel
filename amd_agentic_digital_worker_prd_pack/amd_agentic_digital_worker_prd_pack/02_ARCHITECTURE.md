@@ -2,7 +2,7 @@
 
 ## 1. High-level architecture
 
-The solid nodes below are implemented in Phase 2. Dashed nodes are planned for
+The solid nodes below are implemented through Phase 3. Dashed nodes are planned for
 later phases and are not runtime claims.
 
 ```mermaid
@@ -13,6 +13,10 @@ flowchart TB
     API --> IncidentStore[(SQLite incident store)]
     API --> Workflow[Bounded LangGraph workflow]
     API --> KnowledgeAPI[Read-only knowledge API]
+    API --> Approval[Plan-bound approval policy]
+    Approval --> Simulator[Idempotent remediation simulator]
+    Approval <--> IncidentStore
+    Simulator --> IncidentStore
 
     Workflow --> Retrieval[Retrieval service]
     Retrieval --> Embedder[Deterministic hashing embedder]
@@ -32,10 +36,8 @@ flowchart TB
     API --> Logs[Allowlisted JSON logs]
 
     RealProvider[Configured live model provider]:::planned
-    Approval[Human approval and simulated remediation]:::planned
     Evaluation[Evaluation runner]:::planned
     Workflow -. later phase .-> RealProvider
-    Workflow -. later phase .-> Approval
     Trace -. later phase .-> Evaluation
 
     classDef planned fill:#f5f5f5,stroke:#777,stroke-dasharray:5 5,color:#333;

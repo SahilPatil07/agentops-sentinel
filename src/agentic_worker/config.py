@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     database_path: str = Field(default="agentops.sqlite3", min_length=1, max_length=500)
     max_graph_steps: int = Field(default=8, ge=1, le=32)
     max_tool_calls: int = Field(default=8, ge=1, le=16)
+    max_tool_attempts: int = Field(default=2, ge=1, le=3)
     tool_timeout_seconds: float = Field(default=2.0, gt=0, le=30, allow_inf_nan=False)
     provider_timeout_seconds: float = Field(default=5.0, gt=0, le=60, allow_inf_nan=False)
     workflow_timeout_seconds: float = Field(default=30.0, gt=0, le=120, allow_inf_nan=False)

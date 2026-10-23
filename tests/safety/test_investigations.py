@@ -75,6 +75,18 @@ class FaultyTools(DiagnosticTools):
         raise RuntimeError("private-tool-value")
 
 
+class TransientTools(DiagnosticTools):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def query(self, name: ToolName, query: DiagnosticQuery) -> list[Observation]:
+        self.calls += 1
+        if self.calls == 1:
+            await asyncio.Event().wait()
+        return await super().query(name, query)
+
+
 class FaultyKnowledge:
     def __init__(self, fault: Literal["timeout", "exception"]) -> None:
         self.fault = fault
@@ -163,9 +175,32 @@ def test_tool_failure_stops_investigation(fault: Literal["timeout", "exception"]
     )
     assert run.status == RunStatus.DEGRADED
     assert run.error_code == ("tool_timeout" if fault == "timeout" else "tool_failed")
-    assert run.tool_calls == 1
+    assert run.tool_calls == (2 if fault == "timeout" else 1)
     assert any(event.event == "tool_failed" for event in trace)
     assert not any(event.event == "provider_started" for event in trace)
+
+
+def test_transient_tool_timeout_is_retried_within_budget() -> None:
+    tools = TransientTools()
+    application = create_app(Settings(_env_file=None, tool_timeout_seconds=0.02))
+    service = cast(InvestigationService, application.state.investigations)
+    service.tools = tools
+    with TestClient(application) as client:
+        incident = client.post("/api/v1/incidents", json=PAYLOAD).json()
+        run = client.post(f"/api/v1/incidents/{incident['incident_id']}/runs", json={}).json()
+        assert run["status"] == "succeeded"
+        assert run["tool_calls"] == 5
+        assert tools.calls == 5
+
+
+def test_duplicate_tool_call_is_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "agentic_worker.orchestration.graph.TOOL_NAMES", ("query_logs", "query_logs")
+    )
+    run, _trace = failure_case(Settings(_env_file=None))
+    assert run.status == RunStatus.BLOCKED
+    assert run.error_code == "duplicate_tool_call"
+    assert run.tool_calls == 1
 
 
 @pytest.mark.parametrize("budget", ["steps", "tools", "tool_output", "report_output"])
@@ -227,7 +262,7 @@ def test_offline_injection_does_not_change_the_report(monkeypatch: pytest.Monkey
             assert "private-input-value" not in client.get(f"{path}/trace").text
             assert (
                 client.post(f"{path}/actions/review-extraction-host/approve", json={}).status_code
-                == 404
+                == 422
             )
         for report in reports:
             assert report["status"] == "succeeded"
@@ -246,3 +281,24 @@ def test_offline_injection_does_not_change_the_report(monkeypatch: pytest.Monkey
             assert "private-input-value" not in policy_outputs
             assert "execute shell" not in policy_outputs.lower()
         assert attempted_connections == []
+
+
+def test_retrieved_instructions_remain_untrusted_data() -> None:
+    settings = Settings(_env_file=None, retrieval_top_k=8, retrieval_min_score=0)
+    with TestClient(create_app(settings)) as client:
+        incident = client.post("/api/v1/incidents", json=PAYLOAD).json()
+        run = client.post(f"/api/v1/incidents/{incident['incident_id']}/runs", json={}).json()
+        report = client.get(f"/api/v1/runs/{run['run_id']}/report").json()
+
+        retrieved_text = " ".join(
+            citation["excerpt"] for citation in report["knowledge_citations"]
+        ).lower()
+        assert "execute shell commands" in retrieved_text
+        policy_output = json.dumps(
+            {
+                "hypotheses": report["hypotheses"],
+                "actions": report["recommended_actions"],
+            }
+        ).lower()
+        assert "execute shell commands" not in policy_output
+        assert run["status"] == "needs_input"

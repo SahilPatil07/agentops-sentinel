@@ -2,9 +2,9 @@
 
 Base path: `/api/v1`
 
-Phase 2 status: incident, run, report, trace, health, and read-only knowledge
-endpoints below are implemented. Approval execution, knowledge mutation, and
-evaluation remain planned.
+Phase 3 status: incident, run, report, trace, health, read-only knowledge, and
+plan-bound simulated action endpoints below are implemented. Knowledge mutation,
+real remediation, and evaluation remain planned.
 The OpenAPI schema at `/openapi.json` describes the implemented contracts.
 
 ## 1. Create an incident
@@ -84,22 +84,29 @@ Diagnostic citations are validated against collected observations. Knowledge
 citations include the document and chunk IDs, stance, content hash, exact source
 offsets, excerpt, and retrieval score; each is validated against the persistent
 index before a report is accepted.
-Actions are simulated proposals with `approval_required: true` and
-`execution_status: not_executed`. No proposal can execute in Phase 2.
+Actions are simulated proposals with `approval_required: true`, a content-derived
+`plan_version`, and `execution_status: not_executed`. The report is immutable;
+simulation outcomes are separate persisted records.
 
 Missing runs return 404; a run without a validated report returns 409 from the
 report endpoint. Trace pagination accepts `offset >= 0` and `limit` from 1 to
 100 (default 100). Events are ordered by sequence and include safe failure codes,
 tool observations, and timing metadata rather than raw exception messages.
 
-## 4. Approvals (planned)
+## 4. Approvals and simulation
 
 -   `POST /runs/{run_id}/actions/{action_id}/approve`
 -   `POST /runs/{run_id}/actions/{action_id}/reject`
+-   `POST /runs/{run_id}/actions/{action_id}/execute`
 
 Approval request requires reviewer label and plan version. In a
 portfolio demo, reviewer identity may be a local demo identity, but must
-be clearly documented as not production authentication.
+be clearly documented as not production authentication. Approval and rejection
+decisions are persisted with generated IDs and timestamps. Execution requires the
+latest decision for the current run, action, and plan version to be `approved`.
+Missing or rejected approval returns 403; stale plans and post-execution decisions
+return 409. Execution is idempotent and returns a persisted result labeled
+`simulated`; it never changes external state.
 
 ## 5. Knowledge retrieval
 

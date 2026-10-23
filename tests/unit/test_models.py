@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from agentic_worker.domain.models import IncidentCreate
+from agentic_worker.domain.models import IncidentCreate, RecommendedAction
 
 
 def valid_incident() -> dict[str, object]:
@@ -43,3 +43,19 @@ def test_invalid_incident(field: str, value: object) -> None:
     payload = {**valid_incident(), field: value}
     with pytest.raises(ValidationError):
         IncidentCreate.model_validate(payload)
+
+
+def test_action_plan_version_is_content_bound() -> None:
+    payload = {
+        "action_id": "review-host",
+        "title": "Review host configuration",
+        "risk": "medium",
+        "preconditions": ["Confirm the intended host."],
+        "expected_result": "Connectivity is restored in the simulation.",
+        "verification": ["Check simulated connectivity."],
+        "rollback": "Restore the previous simulated value.",
+    }
+    action = RecommendedAction.model_validate(payload)
+    assert RecommendedAction.model_validate_json(action.model_dump_json()) == action
+    with pytest.raises(ValidationError):
+        RecommendedAction.model_validate({**payload, "plan_version": "0" * 64})

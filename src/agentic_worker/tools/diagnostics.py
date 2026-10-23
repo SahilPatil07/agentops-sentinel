@@ -2,14 +2,23 @@ from importlib.resources import files
 
 from pydantic import Field, RootModel
 
-from agentic_worker.domain.models import DiagnosticQuery, Observation, ToolName
+from agentic_worker.domain.models import DiagnosticQuery, Observation, ToolDefinition, ToolName
 
-TOOL_NAMES: tuple[ToolName, ...] = (
-    "query_logs",
-    "query_metrics",
-    "compare_deployments",
-    "get_recent_incidents",
-)
+TOOL_REGISTRY: dict[ToolName, ToolDefinition] = {
+    "query_logs": ToolDefinition(
+        name="query_logs", description="Query bounded synthetic service logs."
+    ),
+    "query_metrics": ToolDefinition(
+        name="query_metrics", description="Query bounded synthetic service metrics."
+    ),
+    "compare_deployments": ToolDefinition(
+        name="compare_deployments", description="Compare synthetic deployment snapshots."
+    ),
+    "get_recent_incidents": ToolDefinition(
+        name="get_recent_incidents", description="Read related synthetic incident history."
+    ),
+}
+TOOL_NAMES: tuple[ToolName, ...] = tuple(TOOL_REGISTRY)
 
 
 class ObservationBatch(RootModel[list[Observation]]):
@@ -26,7 +35,7 @@ class DiagnosticTools:
             raise ValueError("Duplicate synthetic diagnostic source IDs")
 
     async def query(self, name: ToolName, query: DiagnosticQuery) -> list[Observation]:
-        if name not in TOOL_NAMES:
+        if name not in TOOL_REGISTRY:
             raise ValueError("Unsupported diagnostic tool")
         return [
             item

@@ -7,7 +7,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
+from agentic_worker.actions.service import ActionService
 from agentic_worker.api.middleware import RequestBoundaryMiddleware
+from agentic_worker.api.routes_actions import action_routes
 from agentic_worker.api.routes_incidents import incident_routes
 from agentic_worker.api.routes_knowledge import knowledge_routes
 from agentic_worker.api.routes_runs import run_routes
@@ -30,6 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     service = InvestigationService(
         store, configuration, MockProvider(), DiagnosticTools(), knowledge
     )
+    actions = ActionService(store)
     ready = False
 
     @asynccontextmanager
@@ -58,10 +61,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.settings = configuration
     application.state.store = store
     application.state.investigations = service
+    application.state.actions = actions
     application.state.knowledge = knowledge
     application.add_middleware(RequestBoundaryMiddleware, settings=configuration)
     application.include_router(incident_routes(store))
     application.include_router(run_routes(service))
+    application.include_router(action_routes(actions))
     application.include_router(knowledge_routes(knowledge))
 
     def error_response(

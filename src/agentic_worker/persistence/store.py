@@ -1,15 +1,19 @@
 import sqlite3
 from datetime import UTC, datetime
-from uuid import uuid4
+from typing import Literal
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import URL, ForeignKey, String, Text, create_engine, select
 from sqlalchemy.event import listen
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from sqlalchemy.pool import ConnectionPoolEntry, StaticPool
 
 from agentic_worker.domain.errors import ErrorCode, WorkerError
 from agentic_worker.domain.models import (
+    ActionExecutionRecord,
+    ApprovalRecord,
+    ApprovalRequest,
     IncidentCreate,
     IncidentRecord,
     IncidentReport,
@@ -45,6 +49,27 @@ class TraceRow(Base):
 
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id"), primary_key=True)
     sequence: Mapped[int] = mapped_column(primary_key=True)
+    payload: Mapped[str] = mapped_column(Text)
+
+
+class ApprovalRow(Base):
+    __tablename__ = "approval_decisions"
+
+    approval_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id"), index=True)
+    action_id: Mapped[str] = mapped_column(String(500), index=True)
+    plan_version: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(index=True)
+    payload: Mapped[str] = mapped_column(Text)
+
+
+class ActionExecutionRow(Base):
+    __tablename__ = "action_executions"
+
+    execution_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id"), index=True)
+    action_id: Mapped[str] = mapped_column(String(500), index=True)
+    plan_version: Mapped[str] = mapped_column(String(64), index=True)
     payload: Mapped[str] = mapped_column(Text)
 
 
@@ -109,6 +134,8 @@ class Store:
                 session.execute(select(IncidentRow.incident_id).limit(1))
                 session.execute(select(RunRow.run_id).limit(1))
                 session.execute(select(TraceRow.run_id).limit(1))
+                session.execute(select(ApprovalRow.approval_id).limit(1))
+                session.execute(select(ActionExecutionRow.execution_id).limit(1))
             return True
         except SQLAlchemyError:
             return False
@@ -207,3 +234,95 @@ class Store:
                 .limit(limit)
             )
             return [TraceEvent.model_validate_json(row.payload) for row in rows]
+
+    def record_approval(
+        self,
+        run_id: str,
+        action_id: str,
+        request: ApprovalRequest,
+        decision: Literal["approved", "rejected"],
+    ) -> ApprovalRecord:
+        record = ApprovalRecord(
+            approval_id=f"approval_{uuid4().hex}",
+            run_id=run_id,
+            action_id=action_id,
+            reviewer=request.reviewer,
+            plan_version=request.plan_version,
+            decision=decision,
+            created_at=datetime.now(UTC),
+        )
+        with Session(self.engine) as session, session.begin():
+            session.add(
+                ApprovalRow(
+                    approval_id=record.approval_id,
+                    run_id=run_id,
+                    action_id=action_id,
+                    plan_version=request.plan_version,
+                    created_at=record.created_at,
+                    payload=record.model_dump_json(),
+                )
+            )
+        return record
+
+    def get_latest_approval(
+        self, run_id: str, action_id: str, plan_version: str
+    ) -> ApprovalRecord | None:
+        with Session(self.engine) as session:
+            row = session.scalar(
+                select(ApprovalRow)
+                .where(
+                    ApprovalRow.run_id == run_id,
+                    ApprovalRow.action_id == action_id,
+                    ApprovalRow.plan_version == plan_version,
+                )
+                .order_by(ApprovalRow.created_at.desc(), ApprovalRow.approval_id.desc())
+                .limit(1)
+            )
+            return ApprovalRecord.model_validate_json(row.payload) if row is not None else None
+
+    def get_action_execution(
+        self, run_id: str, action_id: str, plan_version: str
+    ) -> ActionExecutionRecord | None:
+        with Session(self.engine) as session:
+            row = session.scalar(
+                select(ActionExecutionRow).where(
+                    ActionExecutionRow.run_id == run_id,
+                    ActionExecutionRow.action_id == action_id,
+                    ActionExecutionRow.plan_version == plan_version,
+                )
+            )
+            return (
+                ActionExecutionRecord.model_validate_json(row.payload) if row is not None else None
+            )
+
+    def record_action_execution(
+        self, run_id: str, action_id: str, plan_version: str, approval_id: str
+    ) -> ActionExecutionRecord:
+        identity = f"{run_id}:{action_id}:{plan_version}"
+        execution_id = f"execution_{uuid5(NAMESPACE_URL, identity).hex}"
+        record = ActionExecutionRecord(
+            execution_id=execution_id,
+            approval_id=approval_id,
+            run_id=run_id,
+            action_id=action_id,
+            plan_version=plan_version,
+            result="The approved remediation was simulated; no external state was changed.",
+            created_at=datetime.now(UTC),
+        )
+        try:
+            with Session(self.engine) as session, session.begin():
+                session.add(
+                    ActionExecutionRow(
+                        execution_id=record.execution_id,
+                        run_id=run_id,
+                        action_id=action_id,
+                        plan_version=plan_version,
+                        payload=record.model_dump_json(),
+                    )
+                )
+        except IntegrityError:
+            existing = self.get_action_execution(run_id, action_id, plan_version)
+            if existing is None:
+                raise
+            return existing
+        return record

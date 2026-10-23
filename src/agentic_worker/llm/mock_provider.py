@@ -68,24 +68,27 @@ class MockProvider:
                 )
             )
             actions.append(
-                RecommendedAction(
-                    action_id="review-extraction-host",
-                    title="Review the extraction-host configuration",
-                    risk="medium",
-                    preconditions=[
-                        "Confirm the intended host with the service owner.",
-                        "Obtain approval tied to a reviewed simulation plan before changes.",
-                    ],
-                    expected_result=(
-                        "A later approved simulation would restore dependency connectivity."
-                    ),
-                    verification=[
-                        "Compare the intended host with the deployment configuration.",
-                        "Check extraction connectivity and the ingestion error ratio.",
-                    ],
-                    rollback=(
-                        "Retain the previous configuration and restore it if verification fails."
-                    ),
+                RecommendedAction.model_validate(
+                    {
+                        "action_id": "review-extraction-host",
+                        "title": "Review the extraction-host configuration",
+                        "risk": "medium",
+                        "preconditions": [
+                            "Confirm the intended host with the service owner.",
+                            "Obtain approval tied to a reviewed simulation plan before changes.",
+                        ],
+                        "expected_result": (
+                            "A later approved simulation would restore dependency connectivity."
+                        ),
+                        "verification": [
+                            "Compare the intended host with the deployment configuration.",
+                            "Check extraction connectivity and the ingestion error ratio.",
+                        ],
+                        "rollback": (
+                            "Retain the previous configuration and restore it if "
+                            "verification fails."
+                        ),
+                    }
                 )
             )
         report = IncidentReport(

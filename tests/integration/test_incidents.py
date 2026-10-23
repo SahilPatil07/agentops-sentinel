@@ -131,7 +131,10 @@ def test_invalid_run_requests_and_missing_resources() -> None:
         assert client.get(f"/api/v1/runs/{run['run_id']}/trace?limit=101").status_code == 422
 
 
-@pytest.mark.parametrize("table_name", ["incidents", "runs", "trace_events"])
+@pytest.mark.parametrize(
+    "table_name",
+    ["incidents", "runs", "trace_events", "approval_decisions", "action_executions"],
+)
 def test_liveness_stays_up_when_database_is_not_ready(table_name: str) -> None:
     application = create_app(Settings(_env_file=None))
     store = cast(Store, application.state.store)

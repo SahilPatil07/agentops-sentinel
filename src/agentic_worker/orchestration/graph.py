@@ -132,6 +132,7 @@ class RunExecution:
         self.sequence = 0
         self.steps = 0
         self.tool_calls = 0
+        self.tool_fingerprints: set[str] = set()
 
     async def emit(
         self,
@@ -174,43 +175,52 @@ class RunExecution:
         await self.step("diagnostics")
         observations: list[Observation] = []
         for name in TOOL_NAMES:
-            if self.tool_calls >= self.run.max_tool_calls:
-                raise RunFailure("tool_budget_exhausted", RunStatus.BLOCKED)
-            self.tool_calls += 1
-            await self.emit("diagnostics", "tool_started", tool_name=name)
-            started = perf_counter()
-            try:
-                output = await asyncio.wait_for(
-                    self.service.tools.query(
-                        name, DiagnosticQuery(service=state["incident"].service)
-                    ),
-                    timeout=self.service.settings.tool_timeout_seconds,
-                )
-                batch = ObservationBatch.model_validate(output)
-                output = batch.root
-                if (
-                    len(batch.model_dump_json().encode("utf-8"))
-                    > self.service.settings.max_tool_output_bytes
-                ):
-                    raise RunFailure("output_limit_exceeded", RunStatus.DEGRADED)
-                if any(
-                    item.tool_name != name or item.service != state["incident"].service
-                    for item in output
-                ):
-                    raise RunFailure("tool_failed", RunStatus.DEGRADED)
-            except TimeoutError as exc:
-                await self.emit(
-                    "diagnostics", "tool_failed", tool_name=name, error_code="tool_timeout"
-                )
-                raise RunFailure("tool_timeout", RunStatus.DEGRADED) from exc
-            except RunFailure as exc:
-                await self.emit("diagnostics", "tool_failed", tool_name=name, error_code=exc.code)
-                raise
-            except Exception as exc:
-                await self.emit(
-                    "diagnostics", "tool_failed", tool_name=name, error_code="tool_failed"
-                )
-                raise RunFailure("tool_failed", RunStatus.DEGRADED) from exc
+            query = DiagnosticQuery(service=state["incident"].service)
+            fingerprint = f"{name}:{query.model_dump_json()}"
+            if fingerprint in self.tool_fingerprints:
+                raise RunFailure("duplicate_tool_call", RunStatus.BLOCKED)
+            self.tool_fingerprints.add(fingerprint)
+            for attempt in range(self.service.settings.max_tool_attempts):
+                if self.tool_calls >= self.run.max_tool_calls:
+                    raise RunFailure("tool_budget_exhausted", RunStatus.BLOCKED)
+                self.tool_calls += 1
+                await self.emit("diagnostics", "tool_started", tool_name=name)
+                started = perf_counter()
+                try:
+                    output = await asyncio.wait_for(
+                        self.service.tools.query(name, query),
+                        timeout=self.service.settings.tool_timeout_seconds,
+                    )
+                    batch = ObservationBatch.model_validate(output)
+                    output = batch.root
+                    if (
+                        len(batch.model_dump_json().encode("utf-8"))
+                        > self.service.settings.max_tool_output_bytes
+                    ):
+                        raise RunFailure("output_limit_exceeded", RunStatus.DEGRADED)
+                    if any(
+                        item.tool_name != name or item.service != state["incident"].service
+                        for item in output
+                    ):
+                        raise RunFailure("tool_failed", RunStatus.DEGRADED)
+                except TimeoutError as exc:
+                    await self.emit(
+                        "diagnostics", "tool_failed", tool_name=name, error_code="tool_timeout"
+                    )
+                    if attempt + 1 == self.service.settings.max_tool_attempts:
+                        raise RunFailure("tool_timeout", RunStatus.DEGRADED) from exc
+                except RunFailure as exc:
+                    await self.emit(
+                        "diagnostics", "tool_failed", tool_name=name, error_code=exc.code
+                    )
+                    raise
+                except Exception as exc:
+                    await self.emit(
+                        "diagnostics", "tool_failed", tool_name=name, error_code="tool_failed"
+                    )
+                    raise RunFailure("tool_failed", RunStatus.DEGRADED) from exc
+                else:
+                    break
             observations.extend(output)
             await self.emit(
                 "diagnostics",

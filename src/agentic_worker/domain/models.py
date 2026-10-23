@@ -1,8 +1,11 @@
+import hashlib
+import json
+from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 Title = Annotated[
     str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=200)
@@ -22,6 +25,10 @@ Service = Annotated[
 ]
 EvidenceReference = Annotated[
     str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=500)
+]
+PlanVersion = Annotated[str, StringConstraints(strict=True, pattern=r"^[0-9a-f]{64}$")]
+Reviewer = Annotated[
+    str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=100)
 ]
 
 
@@ -77,6 +84,7 @@ FailureCode = Literal[
     "tool_budget_exhausted",
     "tool_timeout",
     "tool_failed",
+    "duplicate_tool_call",
     "provider_timeout",
     "provider_failed",
     "invalid_report",
@@ -96,6 +104,12 @@ class RunRequest(Contract):
 
 class DiagnosticQuery(Contract):
     service: Service
+
+
+class ToolDefinition(Contract):
+    name: ToolName
+    description: Title
+    permission_class: Literal["read_only"] = "read_only"
 
 
 class Observation(Contract):
@@ -151,6 +165,67 @@ class RecommendedAction(Contract):
     approval_required: Literal[True] = True
     simulated: Literal[True] = True
     execution_status: Literal["not_executed"] = "not_executed"
+    plan_version: PlanVersion
+
+    @model_validator(mode="before")
+    @classmethod
+    def bind_plan_version(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        expected = action_plan_version(value)
+        supplied = value.get("plan_version")
+        if supplied is not None and supplied != expected:
+            raise ValueError("plan_version does not match the action plan")
+        return {**value, "plan_version": expected}
+
+
+def action_plan_version(action: Mapping[str, object]) -> str:
+    fields = {
+        key: action[key]
+        for key in (
+            "action_id",
+            "title",
+            "risk",
+            "preconditions",
+            "expected_result",
+            "verification",
+            "rollback",
+        )
+        if key in action
+    }
+    fields["approval_required"] = action.get("approval_required", True)
+    fields["simulated"] = action.get("simulated", True)
+    canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class ApprovalRequest(Contract):
+    reviewer: Reviewer
+    plan_version: PlanVersion
+
+
+class ApprovalRecord(ApprovalRequest):
+    approval_id: str
+    run_id: str
+    action_id: EvidenceReference
+    decision: Literal["approved", "rejected"]
+    created_at: datetime
+
+
+class ActionExecutionRequest(Contract):
+    plan_version: PlanVersion
+
+
+class ActionExecutionRecord(Contract):
+    execution_id: str
+    approval_id: str
+    run_id: str
+    action_id: EvidenceReference
+    plan_version: PlanVersion
+    status: Literal["simulated"] = "simulated"
+    simulated: Literal[True] = True
+    result: Description
+    created_at: datetime
 
 
 class IncidentReport(Contract):
